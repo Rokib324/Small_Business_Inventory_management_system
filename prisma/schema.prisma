@@ -1,0 +1,351 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------
+// Enums
+// ----------------------------------------------------
+
+enum Role {
+  OWNER
+  STAFF
+}
+
+enum StockMovementType {
+  PURCHASE
+  SALE
+  RETURN_CUSTOMER
+  RETURN_SUPPLIER
+  ADJUSTMENT
+  DAMAGE
+}
+
+enum StockReferenceType {
+  SALE
+  PURCHASE_ORDER
+  MANUAL_ADJUSTMENT
+}
+
+enum PaymentMethod {
+  CASH
+  BKASH
+  NAGAD
+  ROCKET
+  UPAY
+  BANK
+  CHEQUE
+  MIXED
+}
+
+enum SaleStatus {
+  COMPLETED
+  CANCELLED
+  DRAFT
+}
+
+enum LedgerEntryType {
+  SALE
+  PAYMENT_RECEIVED
+  RETURN
+  ADJUSTMENT
+  OPENING_BALANCE
+  SUPPLIER_PURCHASE
+  SUPPLIER_PAYMENT
+}
+
+enum LedgerReferenceType {
+  SALE
+  PAYMENT
+  MANUAL
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  CANCEL
+  LOGIN
+  LOGOUT
+}
+
+// ----------------------------------------------------
+// Models
+// ----------------------------------------------------
+
+model Shop {
+  id             String          @id @default(cuid())
+  name           String
+  phone          String?
+  address        String?
+  currency       String          @default("BDT")
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  deletedAt      DateTime?
+
+  users          User[]
+  customers      Customer[]
+  suppliers      Supplier[]
+  products       Product[]
+  stockMovements StockMovement[]
+  sales          Sale[]
+  saleItems      SaleItem[]
+  payments       Payment[]
+  ledgerEntries  LedgerEntry[]
+  auditLogs      AuditLog[]
+
+  @@index([deletedAt])
+}
+
+model User {
+  id           String     @id @default(cuid())
+  shopId       String
+  shop         Shop       @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name         String
+  email        String?    @unique
+  phone        String?    @unique
+  passwordHash String
+  role         Role       @default(STAFF)
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  deletedAt    DateTime?
+
+  sales        Sale[]
+  payments     Payment[]  @relation("ReceivedPayments")
+  auditLogs    AuditLog[]
+
+  @@index([shopId])
+  @@index([shopId, deletedAt])
+}
+
+model Customer {
+  id                  String        @id @default(cuid())
+  shopId              String
+  shop                Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name                String
+  phone               String?
+  address             String?
+  cachedBalancePoisha Int           @default(0) // Positive = due owed to shop, Negative = advance
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  deletedAt           DateTime?
+
+  sales               Sale[]
+  payments            Payment[]
+  ledgerEntries       LedgerEntry[]
+
+  @@index([shopId])
+  @@index([shopId, phone])
+  @@index([shopId, name])
+  @@index([shopId, deletedAt])
+}
+
+model Supplier {
+  id                  String        @id @default(cuid())
+  shopId              String
+  shop                Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name                String
+  companyName         String?
+  phone               String?
+  address             String?
+  cachedBalancePoisha Int           @default(0) // Positive = payable to supplier, Negative = advance given
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  deletedAt           DateTime?
+
+  payments            Payment[]
+  ledgerEntries       LedgerEntry[]
+
+  @@index([shopId])
+  @@index([shopId, phone])
+  @@index([shopId, deletedAt])
+}
+
+model Product {
+  id                String          @id @default(cuid())
+  shopId            String
+  shop              Shop            @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name              String
+  sku               String?
+  unit              String          @default("PCS") // e.g. PCS, KG, FT, BAG, BOX, LTR
+  buyPricePoisha    Int             @default(0)
+  sellPricePoisha   Int             @default(0)
+  cachedStock       Int             @default(0)
+  lowStockThreshold Int             @default(5)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  deletedAt         DateTime?
+
+  stockMovements    StockMovement[]
+  saleItems         SaleItem[]
+
+  @@index([shopId])
+  @@index([shopId, name])
+  @@index([shopId, sku])
+  @@index([shopId, deletedAt])
+}
+
+model StockMovement {
+  id            String              @id @default(cuid())
+  shopId        String
+  shop          Shop                @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  productId     String
+  product       Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantity      Int                 // Positive = Inflow, Negative = Outflow
+  movementType  StockMovementType
+  referenceType StockReferenceType?
+  referenceId   String?
+  note          String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  deletedAt     DateTime?
+
+  @@index([shopId])
+  @@index([productId])
+  @@index([shopId, productId])
+  @@index([shopId, referenceId])
+}
+
+model Sale {
+  id             String        @id @default(cuid())
+  shopId         String
+  shop           Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId       String?       // Client-generated UUID for offline idempotency
+  invoiceNumber  String        // e.g. INV-2026-0001 or sequence per shop
+  customerId     String?
+  customer       Customer?     @relation(fields: [customerId], references: [id])
+  userId         String?
+  user           User?         @relation(fields: [userId], references: [id])
+  subtotalPoisha Int
+  discountPoisha Int           @default(0)
+  totalPoisha    Int           // subtotalPoisha - discountPoisha
+  paidPoisha     Int           @default(0)
+  duePoisha      Int           @default(0) // totalPoisha - paidPoisha
+  paymentMethod  PaymentMethod @default(CASH)
+  status         SaleStatus    @default(COMPLETED)
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime?
+
+  items          SaleItem[]
+  payments       Payment[]
+  ledgerEntries  LedgerEntry[]
+
+  @@unique([shopId, clientId])
+  @@unique([shopId, invoiceNumber])
+  @@index([shopId])
+  @@index([shopId, customerId])
+  @@index([shopId, createdAt])
+  @@index([shopId, deletedAt])
+}
+
+model SaleItem {
+  id              String    @id @default(cuid())
+  shopId          String
+  shop            Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  saleId          String
+  sale            Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product   @relation(fields: [productId], references: [id])
+  productName     String    // Historical snapshot of product name
+  unit            String    // Historical snapshot of unit
+  quantity        Int
+  unitPricePoisha Int
+  buyPricePoisha  Int       @default(0) // Historical cost price snapshot
+  subtotalPoisha  Int       // quantity * unitPricePoisha
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  @@index([shopId])
+  @@index([saleId])
+  @@index([productId])
+}
+
+model Payment {
+  id            String        @id @default(cuid())
+  shopId        String
+  shop          Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId      String?       // Client-generated UUID for offline idempotency
+  receiptNumber String?
+  customerId    String?
+  customer      Customer?     @relation(fields: [customerId], references: [id])
+  supplierId    String?
+  supplier      Supplier?     @relation(fields: [supplierId], references: [id])
+  saleId        String?
+  sale          Sale?         @relation(fields: [saleId], references: [id])
+  amountPoisha  Int
+  method        PaymentMethod @default(CASH)
+  reference     String?       // TrxID, Bank receipt, Cheque #
+  note          String?
+  receivedById  String?
+  receivedBy    User?         @relation("ReceivedPayments", fields: [receivedById], references: [id])
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  deletedAt     DateTime?
+
+  @@unique([shopId, clientId])
+  @@index([shopId])
+  @@index([shopId, customerId])
+  @@index([shopId, supplierId])
+  @@index([shopId, saleId])
+  @@index([shopId, createdAt])
+  @@index([shopId, deletedAt])
+}
+
+model LedgerEntry {
+  id                 String               @id @default(cuid())
+  shopId             String
+  shop               Shop                 @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId           String?              // Client-generated UUID for offline idempotency
+  customerId         String?
+  customer           Customer?            @relation(fields: [customerId], references: [id])
+  supplierId         String?
+  supplier           Supplier?            @relation(fields: [supplierId], references: [id])
+  saleId             String?
+  sale               Sale?                @relation(fields: [saleId], references: [id])
+  entryType          LedgerEntryType
+  debitPoisha        Int                  @default(0) // Increases customer due (receivable)
+  creditPoisha       Int                  @default(0) // Decreases customer due (payment received)
+  balanceAfterPoisha Int                  // Running balance snapshot
+  referenceType      LedgerReferenceType?
+  referenceId        String?
+  description        String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  deletedAt          DateTime?
+
+  @@unique([shopId, clientId])
+  @@index([shopId])
+  @@index([shopId, customerId])
+  @@index([shopId, supplierId])
+  @@index([shopId, createdAt])
+  @@index([shopId, referenceId])
+  @@index([shopId, deletedAt])
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  shopId     String
+  shop       Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?       @relation(fields: [userId], references: [id])
+  action     AuditAction
+  entityType String      // "Sale", "Customer", "Product", "Payment", etc.
+  entityId   String
+  oldValues  Json?
+  newValues  Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+
+  @@index([shopId])
+  @@index([shopId, entityType, entityId])
+  @@index([shopId, createdAt])
+}

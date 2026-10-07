@@ -56,3 +56,29 @@ export const editProductSchema = z.object({
 });
 
 export type EditProductInput = z.infer<typeof editProductSchema>;
+
+export const stockAdjustmentReasons = [
+  "DAMAGE",
+  "COUNT_CORRECTION",
+  "EXPIRY",
+  "RETURN_CUSTOMER",
+  "RETURN_SUPPLIER",
+  "OTHER",
+] as const;
+
+export const stockAdjustmentSchema = z.object({
+  productId: z.string().min(1, "পণ্য নির্বাচন করুন"),
+  adjustmentType: z.enum(["INCREASE", "DECREASE"], {
+    message: "সমন্বয়ের ধরন নির্বাচন করুন",
+  }),
+  quantity: z
+    .number({ message: "সঠিক পরিমাণ লিখুন" })
+    .int("পরিমাণ পূর্ণসংখ্যা হতে হবে")
+    .positive("পরিমাণ ০ এর বেশি হতে হবে"),
+  reason: z.enum(stockAdjustmentReasons, {
+    message: "সঠিক কারণ নির্বাচন করুন",
+  }),
+  note: z.string().max(255).optional().or(z.literal("")),
+});
+
+export type StockAdjustmentInput = z.infer<typeof stockAdjustmentSchema>;

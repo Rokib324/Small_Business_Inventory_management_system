@@ -10,6 +10,9 @@ import {
   BookOpen,
   Package,
   HandCoins,
+  Truck,
+  Building2,
+  BarChart3,
 } from "lucide-react";
 import { t } from "@/lib/i18n";
 import { clsx } from "clsx";
@@ -32,6 +35,11 @@ const navItems = [
     icon: Receipt,
   },
   {
+    href: "/purchases",
+    label: t.nav.purchases,
+    icon: Truck,
+  },
+  {
     href: "/due-list",
     label: t.nav.dueList,
     icon: BookOpen,
@@ -42,6 +50,11 @@ const navItems = [
     icon: Users,
   },
   {
+    href: "/suppliers",
+    label: t.nav.suppliers,
+    icon: Building2,
+  },
+  {
     href: "/products",
     label: t.nav.products,
     icon: Package,
@@ -50,6 +63,11 @@ const navItems = [
     href: "/payments",
     label: t.nav.payments,
     icon: HandCoins,
+  },
+  {
+    href: "/reports",
+    label: t.nav.reports,
+    icon: BarChart3,
   },
 ];
 

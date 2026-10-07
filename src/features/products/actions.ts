@@ -1,12 +1,20 @@
 "use server";
 
 import { getSessionTenantDb } from "@/lib/auth/session";
-import { productSchema, editProductSchema, ProductFormInput, EditProductInput } from "./schemas";
+import {
+  productSchema,
+  editProductSchema,
+  stockAdjustmentSchema,
+  ProductFormInput,
+  EditProductInput,
+  StockAdjustmentInput,
+} from "./schemas";
 import { toPoisha } from "@/lib/money";
 import { logAudit } from "@/lib/audit";
 import { revalidatePath } from "next/cache";
 import { StockMovementType } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
+import { adjustStockTransaction } from "./stock-service";
 
 export interface ActionResponse<T = unknown> {
   success: boolean;
@@ -244,3 +252,55 @@ export async function deleteProductAction(
     };
   }
 }
+
+export async function adjustStockAction(
+  input: StockAdjustmentInput
+): Promise<ActionResponse<{ productId: string; newStock: number }>> {
+  const { session, shopId } = await getSessionTenantDb();
+
+  const validation = stockAdjustmentSchema.safeParse(input);
+  if (!validation.success) {
+    return {
+      success: false,
+      message: "ফরমের তথ্য সঠিক নয়।",
+      errors: validation.error.flatten().fieldErrors,
+    };
+  }
+
+  const data = validation.data;
+
+  try {
+    const result = await adjustStockTransaction({
+      shopId,
+      userId: session.user.id,
+      productId: data.productId,
+      adjustmentType: data.adjustmentType,
+      quantity: data.quantity,
+      reason: data.reason,
+      note: data.note || null,
+    });
+
+    revalidatePath("/products");
+    revalidatePath(`/products/${data.productId}/history`);
+    revalidatePath("/products/low-stock");
+    revalidatePath("/sales/new");
+    revalidatePath("/");
+
+    return {
+      success: true,
+      message: "স্টক সমন্বয় সফলভাবে সম্পন্ন হয়েছে।",
+      data: {
+        productId: result.product.id,
+        newStock: result.product.cachedStock,
+      },
+    };
+  } catch (error: unknown) {
+    const msg =
+      error instanceof Error ? error.message : "স্টক সমন্বয় করতে সমস্যা হয়েছে।";
+    return {
+      success: false,
+      message: msg,
+    };
+  }
+}
+

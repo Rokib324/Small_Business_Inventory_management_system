@@ -17,8 +17,12 @@ import {
   Trash2,
   AlertTriangle,
   CheckCircle2,
+  History,
+  SlidersHorizontal,
 } from "lucide-react";
 import { t } from "@/lib/i18n";
+import { StockAdjustmentModal } from "./stock-adjustment-modal";
+import Link from "next/link";
 
 interface ProductListViewProps {
   products: Product[];
@@ -29,6 +33,7 @@ export function ProductListView({ products }: ProductListViewProps) {
   const [filterLowStock, setFilterLowStock] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [adjustingProduct, setAdjustingProduct] = useState<Product | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const filteredProducts = products.filter((p) => {
@@ -203,6 +208,21 @@ export function ProductListView({ products }: ProductListViewProps) {
                       </td>
                       <td className="px-4 py-3.5 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          <Link
+                            href={`/products/${p.id}/history`}
+                            title="স্টক ইতিহাস"
+                            className="p-1.5 rounded-lg text-zinc-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 transition cursor-pointer"
+                          >
+                            <History className="h-4 w-4" />
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => setAdjustingProduct(p)}
+                            title="স্টক সমন্বয়"
+                            className="p-1.5 rounded-lg text-zinc-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40 transition cursor-pointer"
+                          >
+                            <SlidersHorizontal className="h-4 w-4" />
+                          </button>
                           <button
                             onClick={() => handleEdit(p)}
                             title="সম্পাদনা"
@@ -235,6 +255,15 @@ export function ProductListView({ products }: ProductListViewProps) {
           open={isModalOpen}
           onClose={() => setIsModalOpen(false)}
           productToEdit={editingProduct}
+        />
+      )}
+
+      {/* Stock Adjustment Modal */}
+      {adjustingProduct && (
+        <StockAdjustmentModal
+          open={!!adjustingProduct}
+          onClose={() => setAdjustingProduct(null)}
+          product={adjustingProduct}
         />
       )}
     </div>

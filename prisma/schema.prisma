@@ -62,6 +62,7 @@ enum LedgerReferenceType {
   SALE
   PAYMENT
   MANUAL
+  PURCHASE
 }
 
 enum AuditAction {
@@ -94,6 +95,8 @@ model Shop {
   stockMovements StockMovement[]
   sales          Sale[]
   saleItems      SaleItem[]
+  purchases      Purchase[]
+  purchaseItems  PurchaseItem[]
   payments       Payment[]
   ledgerEntries  LedgerEntry[]
   auditLogs      AuditLog[]
@@ -116,6 +119,7 @@ model User {
   deletedAt    DateTime?
 
   sales        Sale[]
+  purchases    Purchase[]
   payments     Payment[]  @relation("ReceivedPayments")
   auditLogs    AuditLog[]
 
@@ -160,6 +164,7 @@ model Supplier {
 
   payments            Payment[]
   ledgerEntries       LedgerEntry[]
+  purchases           Purchase[]
 
   @@index([shopId])
   @@index([shopId, phone])
@@ -183,6 +188,7 @@ model Product {
 
   stockMovements    StockMovement[]
   saleItems         SaleItem[]
+  purchaseItems     PurchaseItem[]
 
   @@index([shopId])
   @@index([shopId, name])
@@ -209,6 +215,7 @@ model StockMovement {
   @@index([productId])
   @@index([shopId, productId])
   @@index([shopId, referenceId])
+  @@index([shopId, createdAt])
 }
 
 model Sale {
@@ -310,6 +317,8 @@ model LedgerEntry {
   supplier           Supplier?            @relation(fields: [supplierId], references: [id])
   saleId             String?
   sale               Sale?                @relation(fields: [saleId], references: [id])
+  purchaseId         String?
+  purchase           Purchase?            @relation(fields: [purchaseId], references: [id])
   entryType          LedgerEntryType
   debitPoisha        Int                  @default(0) // Increases customer due (receivable)
   creditPoisha       Int                  @default(0) // Decreases customer due (payment received)
@@ -325,9 +334,63 @@ model LedgerEntry {
   @@index([shopId])
   @@index([shopId, customerId])
   @@index([shopId, supplierId])
+  @@index([shopId, purchaseId])
   @@index([shopId, createdAt])
   @@index([shopId, referenceId])
   @@index([shopId, deletedAt])
+}
+
+model Purchase {
+  id             String        @id @default(cuid())
+  shopId         String
+  shop           Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId       String?       // Client-generated UUID for offline idempotency
+  invoiceNumber  String        // e.g. PUR-2026-0001
+  supplierId     String?
+  supplier       Supplier?     @relation(fields: [supplierId], references: [id])
+  userId         String?
+  user           User?         @relation(fields: [userId], references: [id])
+  subtotalPoisha Int
+  totalPoisha    Int
+  paidPoisha     Int           @default(0)
+  duePoisha      Int           @default(0) // totalPoisha - paidPoisha (what I owe supplier)
+  paymentMethod  PaymentMethod @default(CASH)
+  notes          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime?
+
+  items          PurchaseItem[]
+  ledgerEntries  LedgerEntry[]
+
+  @@unique([shopId, clientId])
+  @@unique([shopId, invoiceNumber])
+  @@index([shopId])
+  @@index([shopId, supplierId])
+  @@index([shopId, createdAt])
+  @@index([shopId, deletedAt])
+}
+
+model PurchaseItem {
+  id              String    @id @default(cuid())
+  shopId          String
+  shop            Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  purchaseId      String
+  purchase        Purchase  @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product   @relation(fields: [productId], references: [id])
+  productName     String    // Snapshot of product name
+  unit            String    // Snapshot of unit
+  quantity        Int
+  buyPricePoisha  Int       // Buy price for this purchase
+  subtotalPoisha  Int       // quantity * buyPricePoisha
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  @@index([shopId])
+  @@index([purchaseId])
+  @@index([productId])
 }
 
 model AuditLog {

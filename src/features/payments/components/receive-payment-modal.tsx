@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { receivePaymentAction } from "../actions";
 import { HandCoins } from "lucide-react";
 import { t } from "@/lib/i18n";
+import { enqueueSyncAction, updateLocalCustomerBalance } from "@/lib/offline/db";
+import { syncEngine } from "@/lib/offline/sync-engine";
 
 interface ReceivePaymentModalProps {
   open: boolean;
@@ -63,9 +65,39 @@ export function ReceivePaymentModal({
 
     setLoading(true);
 
+    const handleOfflinePayment = async (targetId: string, amount: number) => {
+      const clientId = crypto.randomUUID();
+      const amountPoisha = Math.round(amount * 100);
+
+      await enqueueSyncAction(
+        "RECEIVE_PAYMENT",
+        {
+          clientId,
+          customerId: targetId,
+          amountPoisha,
+          method,
+          reference: reference ? reference.trim() : null,
+          note: note ? note.trim() : null,
+        },
+        clientId
+      );
+
+      await updateLocalCustomerBalance(targetId, -amountPoisha);
+      syncEngine.refreshCounts();
+      setLoading(false);
+      onClose();
+    };
+
+    const targetCustomerId = preSelectedCustomer ? preSelectedCustomer.id : customerId;
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      await handleOfflinePayment(targetCustomerId, amount);
+      return;
+    }
+
     try {
       const res = await receivePaymentAction({
-        customerId: preSelectedCustomer ? preSelectedCustomer.id : customerId,
+        customerId: targetCustomerId,
         amountTaka: amount,
         method,
         reference,
@@ -81,8 +113,8 @@ export function ReceivePaymentModal({
         onClose();
       }
     } catch {
-      setGeneralError("একটি ত্রুটি ঘটেছে। আবার চেষ্টা করুন।");
-      setLoading(false);
+      // Network drop fallback
+      await handleOfflinePayment(targetCustomerId, amount);
     }
   };
 

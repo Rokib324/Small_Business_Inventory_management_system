@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Product, Customer, PaymentMethod } from "@prisma/client";
-import { formatMoneyBn, fromPoisha, toBanglaDigits } from "@/lib/money";
+import { formatMoneyBn, fromPoisha, toBanglaDigits, toPoisha } from "@/lib/money";
 import { createSaleAction } from "../actions";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -19,8 +19,21 @@ import {
   AlertCircle,
   Receipt,
   CheckCircle,
+  UserPlus,
+  RotateCcw,
 } from "lucide-react";
 import { t } from "@/lib/i18n";
+import { CustomerFormModal } from "@/features/customers/components/customer-form-modal";
+import {
+  enqueueSyncAction,
+  updateLocalProductStock,
+  updateLocalCustomerBalance,
+  cacheProducts,
+  cacheCustomers,
+  getOfflineCustomers,
+  getOfflineProducts,
+} from "@/lib/offline/db";
+import { syncEngine } from "@/lib/offline/sync-engine";
 
 interface NewSalePosProps {
   products: Product[];
@@ -33,8 +46,13 @@ interface CartItem {
   unitPriceTaka: number;
 }
 
-export function NewSalePos({ products, customers }: NewSalePosProps) {
+export function NewSalePos({ products: initialProducts, customers: initialCustomers }: NewSalePosProps) {
   const router = useRouter();
+
+  // Dynamic available lists merged with IndexedDB cache
+  const [availableProducts, setAvailableProducts] = useState<Product[]>(initialProducts);
+  const [availableCustomers, setAvailableCustomers] = useState<Customer[]>(initialCustomers);
+  const [showCustomerModal, setShowCustomerModal] = useState(false);
 
   // Search & Cart states
   const [productQuery, setProductQuery] = useState("");
@@ -47,15 +65,80 @@ export function NewSalePos({ products, customers }: NewSalePosProps) {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [offlineSuccess, setOfflineSuccess] = useState<{
+    invoiceNumber: string;
+    totalTaka: number;
+    paidTaka: number;
+    dueTaka: number;
+  } | null>(null);
+
+  // Sync props into Dexie cache and merge any offline additions
+  useEffect(() => {
+    async function syncLocalDb() {
+      try {
+        // Cache initial products into Dexie
+        await cacheProducts(
+          initialProducts.map((p) => ({
+            ...p,
+            updatedAt: p.updatedAt ? p.updatedAt.toISOString() : new Date().toISOString(),
+          }))
+        );
+
+        // Cache initial customers into Dexie
+        await cacheCustomers(
+          initialCustomers.map((c) => ({
+            ...c,
+            updatedAt: c.updatedAt ? c.updatedAt.toISOString() : new Date().toISOString(),
+          }))
+        );
+
+        // If shopId exists, read offline customers from Dexie to show in dropdown
+        const firstShopId = initialProducts[0]?.shopId || initialCustomers[0]?.shopId;
+        if (firstShopId) {
+          const offlineCusts = await getOfflineCustomers(firstShopId);
+          if (offlineCusts.length > 0) {
+            setAvailableCustomers((prev) => {
+              const existingIds = new Set(prev.map((c) => c.id));
+              const merged = [...prev];
+              for (const oc of offlineCusts) {
+                if (!existingIds.has(oc.id)) {
+                  merged.push(oc as unknown as Customer);
+                }
+              }
+              return merged;
+            });
+          }
+
+          const offlineProds = await getOfflineProducts(firstShopId);
+          if (offlineProds.length > 0) {
+            setAvailableProducts((prev) => {
+              const existingIds = new Set(prev.map((p) => p.id));
+              const merged = [...prev];
+              for (const op of offlineProds) {
+                if (!existingIds.has(op.id)) {
+                  merged.push(op as unknown as Product);
+                }
+              }
+              return merged;
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("[NewSalePos] Failed to sync Dexie cache:", err);
+      }
+    }
+
+    syncLocalDb();
+  }, [initialProducts, initialCustomers]);
 
   // Filtered products for fast lookup
   const searchResults = productQuery.trim()
-    ? products.filter(
+    ? availableProducts.filter(
         (p) =>
           p.name.toLowerCase().includes(productQuery.toLowerCase()) ||
           (p.sku && p.sku.toLowerCase().includes(productQuery.toLowerCase()))
       )
-    : products.slice(0, 8); // default show first 8 products
+    : availableProducts.slice(0, 8); // default show first 8 products
 
   const addToCart = (product: Product) => {
     setCart((prev) => {
@@ -125,7 +208,68 @@ export function NewSalePos({ products, customers }: NewSalePosProps) {
     setPaidTaka("0");
   };
 
-  const selectedCustomer = customers.find((c) => c.id === selectedCustomerId);
+  const selectedCustomer = availableCustomers.find((c) => c.id === selectedCustomerId);
+
+  const handleOfflineSaleSubmit = async () => {
+    const clientId = crypto.randomUUID();
+    const offlineInvoice = `অফলাইন-${clientId.slice(0, 8).toUpperCase()}`;
+
+    await enqueueSyncAction(
+      "CREATE_SALE",
+      {
+        clientId,
+        invoiceNumber: offlineInvoice,
+        customerId: selectedCustomerId || null,
+        items: cart.map((item) => ({
+          productId: item.product.id,
+          quantity: item.quantity,
+          unitPricePoisha: toPoisha(item.unitPriceTaka),
+        })),
+        discountPoisha: toPoisha(numDiscount),
+        paidPoisha: toPoisha(numPaid),
+        paymentMethod,
+        notes: notes.trim() || null,
+      },
+      clientId
+    );
+
+    // Optimistically update Dexie stock and local availableProducts state
+    for (const item of cart) {
+      await updateLocalProductStock(item.product.id, -item.quantity);
+      setAvailableProducts((prev) =>
+        prev.map((p) =>
+          p.id === item.product.id
+            ? { ...p, cachedStock: p.cachedStock - item.quantity }
+            : p
+        )
+      );
+    }
+
+    // Optimistically update Dexie customer balance
+    if (remainingDueTaka > 0 && selectedCustomerId) {
+      const duePoisha = toPoisha(remainingDueTaka);
+      await updateLocalCustomerBalance(selectedCustomerId, duePoisha);
+      setAvailableCustomers((prev) =>
+        prev.map((c) =>
+          c.id === selectedCustomerId
+            ? { ...c, cachedBalancePoisha: c.cachedBalancePoisha + duePoisha }
+            : c
+        )
+      );
+    }
+
+    syncEngine.refreshCounts();
+
+    setOfflineSuccess({
+      invoiceNumber: offlineInvoice,
+      totalTaka: totalPayableTaka,
+      paidTaka: numPaid,
+      dueTaka: remainingDueTaka,
+    });
+
+    setCart([]);
+    setLoading(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -142,6 +286,12 @@ export function NewSalePos({ products, customers }: NewSalePosProps) {
     }
 
     setLoading(true);
+
+    // Offline check
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      await handleOfflineSaleSubmit();
+      return;
+    }
 
     try {
       const res = await createSaleAction({
@@ -165,8 +315,8 @@ export function NewSalePos({ products, customers }: NewSalePosProps) {
 
       router.push(`/sales/${res.data.saleId}`);
     } catch {
-      setError("একটি ত্রুটি ঘটেছে। অনুগ্রহ করে আবার চেষ্টা করুন।");
-      setLoading(false);
+      // Fallback seamlessly to offline sale queue on network drop
+      await handleOfflineSaleSubmit();
     }
   };
 
@@ -185,6 +335,36 @@ export function NewSalePos({ products, customers }: NewSalePosProps) {
         </div>
       </div>
 
+      {/* Offline Success Banner Modal */}
+      {offlineSuccess && (
+        <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+              <CheckCircle className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-bold text-sm">
+                অফলাইন বিক্রয় সফলভাবে সংরক্ষিত হয়েছে!
+              </p>
+              <p className="text-xs text-emerald-700 dark:text-emerald-300 mt-0.5">
+                চালান নং: <span className="font-mono font-bold">{offlineSuccess.invoiceNumber}</span> | মোট: ৳{toBanglaDigits(offlineSuccess.totalTaka)} (নগদ: ৳{toBanglaDigits(offlineSuccess.paidTaka)}, বাকি: ৳{toBanglaDigits(offlineSuccess.dueTaka)})
+              </p>
+              <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">
+                ইন্টারনেট সংযোগ ফিরলে এটি স্বয়ংক্রিয়ভাবে সার্ভারে সিঙ্ক হবে।
+              </p>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => setOfflineSuccess(null)}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs"
+          >
+            <RotateCcw className="h-3.5 w-3.5 mr-1" />
+            পরের বিক্রি করুন
+          </Button>
+        </div>
+      )}
+
       {error && (
         <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-sm flex items-center gap-2">
           <AlertCircle className="h-5 w-5 shrink-0" />
@@ -194,7 +374,7 @@ export function NewSalePos({ products, customers }: NewSalePosProps) {
 
       {/* POS Two-Column Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Product Search & Cart (8 cols) */}
+        {/* Left Column: Product Search & Cart (7 cols) */}
         <div className="lg:col-span-7 space-y-4">
           {/* Fast Product Search */}
           <Card>
@@ -355,11 +535,21 @@ export function NewSalePos({ products, customers }: NewSalePosProps) {
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Customer Selector Card */}
             <Card>
-              <CardHeader className="p-4 pb-2">
+              <CardHeader className="p-4 pb-2 flex flex-row items-center justify-between">
                 <CardTitle className="text-sm font-bold flex items-center gap-2">
                   <User className="h-4 w-4 text-emerald-600" />
                   {t.sales.selectCustomer}
                 </CardTitle>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowCustomerModal(true)}
+                  className="h-7 text-xs text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 px-2 gap-1 rounded-lg"
+                >
+                  <UserPlus className="h-3.5 w-3.5" />
+                  নতুন খদ্দের
+                </Button>
               </CardHeader>
               <CardContent className="p-4 pt-1 space-y-2">
                 <select
@@ -368,7 +558,7 @@ export function NewSalePos({ products, customers }: NewSalePosProps) {
                   className="flex h-10 w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
                 >
                   <option value="">{t.sales.walkInCustomer}</option>
-                  {customers.map((c) => (
+                  {availableCustomers.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name} {c.phone ? `(${c.phone})` : ""} — বাকি: {formatMoneyBn(c.cachedBalancePoisha)}
                     </option>
@@ -418,42 +608,44 @@ export function NewSalePos({ products, customers }: NewSalePosProps) {
                       min="0"
                       value={discountTaka}
                       onChange={(e) => setDiscountTaka(e.target.value)}
-                      className="h-8 text-right font-semibold"
+                      className="text-right h-8 text-xs font-semibold"
                     />
                   </div>
                 </div>
 
-                {/* Total */}
-                <div className="flex justify-between items-center text-base pt-2 border-t border-zinc-100 dark:border-zinc-800">
-                  <span className="font-bold text-zinc-900 dark:text-zinc-100">
-                    {t.common.total}
-                  </span>
-                  <span className="font-extrabold text-xl text-emerald-700 dark:text-emerald-400">
+                {/* Net Total */}
+                <div className="flex justify-between items-center text-sm font-bold py-1 border-t border-dashed border-zinc-200 dark:border-zinc-700">
+                  <span className="text-zinc-800 dark:text-zinc-200">{t.common.total}</span>
+                  <span className="text-lg text-emerald-600 dark:text-emerald-400">
                     {formatMoneyBn(Math.round(totalPayableTaka * 100))}
                   </span>
                 </div>
 
-                {/* Paid Now */}
-                <div className="space-y-1.5 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                {/* Cash/Payment Received */}
+                <div className="space-y-1.5 pt-1">
                   <div className="flex justify-between items-center">
-                    <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                      {t.sales.paidAmount} (৳)
+                    <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                      {t.common.paid} (৳)
                     </span>
                     <div className="flex gap-1.5">
-                      <button
+                      <Button
                         type="button"
+                        size="sm"
+                        variant="outline"
                         onClick={handleFullPayment}
-                        className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-100 hover:bg-emerald-200 text-emerald-800 cursor-pointer"
+                        className="h-6 px-2 text-[10px] rounded"
                       >
                         পুরো পরিশোধ
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
+                        size="sm"
+                        variant="outline"
                         onClick={handleZeroPayment}
-                        className="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-100 hover:bg-amber-200 text-amber-800 cursor-pointer"
+                        className="h-6 px-2 text-[10px] rounded"
                       >
                         পুরো বাকি
-                      </button>
+                      </Button>
                     </div>
                   </div>
                   <Input
@@ -462,79 +654,85 @@ export function NewSalePos({ products, customers }: NewSalePosProps) {
                     min="0"
                     value={paidTaka}
                     onChange={(e) => setPaidTaka(e.target.value)}
-                    className="h-10 text-right font-bold text-base"
+                    className="text-right h-10 text-base font-bold text-emerald-700 dark:text-emerald-400"
                   />
-                </div>
-
-                {/* Remaining Due */}
-                <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 flex justify-between items-center">
-                  <div>
-                    <span className="text-xs font-bold text-zinc-700 dark:text-zinc-300">
-                      {t.sales.dueAmount}
-                    </span>
-                    {remainingDueTaka > 0 && !selectedCustomerId && (
-                      <p className="text-[10px] text-rose-600 font-semibold mt-0.5">
-                        * কাস্টমার নির্বাচন আবশ্যক
-                      </p>
-                    )}
-                  </div>
-                  <span
-                    className={`font-black text-lg ${
-                      remainingDueTaka > 0
-                        ? "text-rose-600 dark:text-rose-400"
-                        : "text-emerald-600 dark:text-emerald-400"
-                    }`}
-                  >
-                    {formatMoneyBn(Math.round(remainingDueTaka * 100))}
-                  </span>
                 </div>
 
                 {/* Payment Method */}
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-                    {t.sales.paymentMethod}
+                  <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                    পরিশোধের মাধ্যম
                   </label>
                   <select
                     value={paymentMethod}
-                    onChange={(e) =>
-                      setPaymentMethod(e.target.value as PaymentMethod)
-                    }
-                    className="flex h-9 w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-1 text-xs font-medium cursor-pointer"
+                    onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                    className="flex h-9 w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-1.5 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer"
                   >
-                    <option value={PaymentMethod.CASH}>নগদ (Cash)</option>
+                    <option value={PaymentMethod.CASH}>ক্যাশ (নগদ টাকা)</option>
                     <option value={PaymentMethod.BKASH}>বিকাশ (bKash)</option>
-                    <option value={PaymentMethod.NAGAD}>নগদ ডিজিটাল (Nagad)</option>
-                    <option value={PaymentMethod.BANK}>ব্যাংক (Bank)</option>
+                    <option value={PaymentMethod.NAGAD}>নগদ (Nagad)</option>
+                    <option value={PaymentMethod.BANK}>ব্যাংক ট্রান্সফার</option>
                   </select>
                 </div>
 
-                {/* Notes */}
-                <div className="space-y-1">
-                  <label className="text-xs text-zinc-500">নোট (ঐচ্ছিক)</label>
+                {/* Due Amount Highlight */}
+                <div
+                  className={`p-3 rounded-xl flex justify-between items-center ${
+                    remainingDueTaka > 0
+                      ? "bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-300"
+                      : "bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300"
+                  }`}
+                >
+                  <span className="text-xs font-semibold">
+                    {remainingDueTaka > 0 ? t.common.due : "পরিশোধিত"}
+                  </span>
+                  <span className="text-base font-bold">
+                    {formatMoneyBn(Math.round(remainingDueTaka * 100))}
+                  </span>
+                </div>
+
+                {/* Note / Memo */}
+                <div>
                   <Input
-                    placeholder="চালানের কোনো বিবরণ বা শর্ত..."
+                    placeholder="নোট বা চালান সংক্রান্ত মন্তব্য (ঐচ্ছিক)"
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     className="h-8 text-xs"
                   />
                 </div>
 
-                {/* Submit Button */}
+                {/* Checkout Submit CTA */}
                 <Button
                   type="submit"
-                  size="lg"
-                  className="w-full text-base font-bold shadow-md shadow-emerald-600/20 mt-2 gap-2"
-                  disabled={cart.length === 0}
-                  isLoading={loading}
+                  disabled={loading || cart.length === 0}
+                  className="w-full h-12 text-base font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-md transition"
                 >
-                  <CheckCircle className="h-5 w-5" />
-                  {t.sales.completeSale}
+                  {loading ? (
+                    "চালান তৈরি হচ্ছে..."
+                  ) : (
+                    <>
+                      <CheckCircle className="h-5 w-5 mr-1" />
+                      {t.sales.completeSale}
+                    </>
+                  )}
                 </Button>
               </CardContent>
             </Card>
           </form>
         </div>
       </div>
+
+      {/* Customer Form Modal for instant additions in POS */}
+      {showCustomerModal && (
+        <CustomerFormModal
+          open={showCustomerModal}
+          onClose={() => setShowCustomerModal(false)}
+          onCustomerCreated={(newCust) => {
+            setAvailableCustomers((prev) => [newCust as unknown as Customer, ...prev]);
+            setSelectedCustomerId(newCust.id);
+          }}
+        />
+      )}
     </div>
   );
 }

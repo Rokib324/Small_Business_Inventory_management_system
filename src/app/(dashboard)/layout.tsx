@@ -2,6 +2,7 @@ import { requireTenantSession } from "@/lib/auth/session";
 import { TopHeader } from "@/components/layout/top-header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { BottomNav } from "@/components/layout/bottom-nav";
+import { OfflineDataProvider } from "@/components/offline/offline-data-provider";
 
 export default async function DashboardLayout({
   children,
@@ -12,6 +13,7 @@ export default async function DashboardLayout({
 
   return (
     <div className="min-h-screen flex flex-col bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+      <OfflineDataProvider />
       <TopHeader
         shopName={session.user.shopName}
         userName={session.user.name || "ব্যবহারকারী"}

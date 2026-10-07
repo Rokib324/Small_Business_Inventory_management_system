@@ -7,6 +7,8 @@ import { Store, LogOut, User as UserIcon } from "lucide-react";
 import { t } from "@/lib/i18n";
 import { Role } from "@prisma/client";
 
+import { SyncStatusIndicator } from "@/components/offline/sync-status-indicator";
+
 interface TopHeaderProps {
   shopName: string;
   userName: string;
@@ -39,7 +41,9 @@ export function TopHeader({ shopName, userName, userRole }: TopHeaderProps) {
       </div>
 
       {/* User and actions */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2.5 sm:gap-3">
+        {/* Offline & Sync Status Indicator */}
+        <SyncStatusIndicator />
         <div className="hidden sm:flex items-center gap-2 text-right">
           <div>
             <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <rect width="192" height="192" rx="40" fill="#059669"/>
+  <rect x="24" y="24" width="144" height="144" rx="28" fill="#10b981" opacity="0.3"/>
+  <!-- Bangla Letter বা / Ledger Book Icon -->
+  <path d="M52 64h88c6.6 0 12 5.4 12 12v64H40V76c0-6.6 5.4-12 12-12z" fill="#ffffff" fill-opacity="0.95"/>
+  <path d="M40 128h112v12c0 6.6-5.4 12-12 12H52c-6.6 0-12-5.4-12-12v-12z" fill="#047857"/>
+  <rect x="54" y="80" width="84" height="10" rx="5" fill="#059669"/>
+  <rect x="54" y="98" width="56" height="8" rx="4" fill="#10b981"/>
+  <circle cx="126" cy="102" r="6" fill="#f59e0b"/>
+</svg>

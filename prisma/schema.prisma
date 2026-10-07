@@ -131,6 +131,7 @@ model Customer {
   id                  String        @id @default(cuid())
   shopId              String
   shop                Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  clientId            String?       // Client-generated UUID for offline idempotency
   name                String
   phone               String?
   address             String?
@@ -143,6 +144,7 @@ model Customer {
   payments            Payment[]
   ledgerEntries       LedgerEntry[]
 
+  @@unique([shopId, clientId])
   @@index([shopId])
   @@index([shopId, phone])
   @@index([shopId, name])
@@ -182,6 +184,7 @@ model Product {
   sellPricePoisha   Int             @default(0)
   cachedStock       Int             @default(0)
   lowStockThreshold Int             @default(5)
+  needsReview       Boolean         @default(false) // Flagged if negative stock occurred during offline sync
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
   deletedAt         DateTime?
@@ -193,6 +196,7 @@ model Product {
   @@index([shopId])
   @@index([shopId, name])
   @@index([shopId, sku])
+  @@index([shopId, needsReview])
   @@index([shopId, deletedAt])
 }
 

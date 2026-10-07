@@ -8,16 +8,26 @@ import { createCustomerAction, updateCustomerAction } from "../actions";
 import { t } from "@/lib/i18n";
 import { Customer } from "@prisma/client";
 
+import { addLocalCustomer, enqueueSyncAction, OfflineCustomer } from "@/lib/offline/db";
+import { syncEngine } from "@/lib/offline/sync-engine";
+
 interface CustomerFormModalProps {
   open: boolean;
   onClose: () => void;
   customerToEdit?: Customer | null;
+  onCustomerCreated?: (customer: {
+    id: string;
+    name: string;
+    phone?: string | null;
+    cachedBalancePoisha: number;
+  }) => void;
 }
 
 export function CustomerFormModal({
   open,
   onClose,
   customerToEdit,
+  onCustomerCreated,
 }: CustomerFormModalProps) {
   const isEditing = !!customerToEdit;
 
@@ -44,44 +54,102 @@ export function CustomerFormModal({
     }
   };
 
+  const handleOfflineCustomerCreate = async () => {
+    const clientId = crypto.randomUUID();
+    const openingDue = parseFloat(formData.openingDueTaka) || 0;
+    const localCust: OfflineCustomer = {
+      id: clientId,
+      clientId,
+      shopId: "",
+      name: formData.name.trim(),
+      phone: formData.phone.trim() || null,
+      address: formData.address.trim() || null,
+      cachedBalancePoisha: Math.round(openingDue * 100),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await addLocalCustomer(localCust);
+    await enqueueSyncAction(
+      "CREATE_CUSTOMER",
+      {
+        clientId,
+        name: formData.name.trim(),
+        phone: formData.phone.trim() || null,
+        address: formData.address.trim() || null,
+      },
+      clientId
+    );
+
+    syncEngine.refreshCounts();
+    if (onCustomerCreated) {
+      onCustomerCreated(localCust);
+    }
+    setLoading(false);
+    onClose();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
     setGeneralError(null);
     setLoading(true);
 
-    if (isEditing && customerToEdit) {
-      const res = await updateCustomerAction({
-        id: customerToEdit.id,
-        name: formData.name,
-        phone: formData.phone,
-        address: formData.address,
-      });
+    // If offline, store directly in IndexedDB queue
+    if (typeof navigator !== "undefined" && !navigator.onLine && !isEditing) {
+      await handleOfflineCustomerCreate();
+      return;
+    }
 
-      if (!res.success) {
-        setGeneralError(res.message || "কাস্টমার আপডেট করতে সমস্যা হয়েছে");
-        if (res.errors) setErrors(res.errors);
-        setLoading(false);
+    try {
+      if (isEditing && customerToEdit) {
+        const res = await updateCustomerAction({
+          id: customerToEdit.id,
+          name: formData.name,
+          phone: formData.phone,
+          address: formData.address,
+        });
+
+        if (!res.success) {
+          setGeneralError(res.message || "কাস্টমার আপডেট করতে সমস্যা হয়েছে");
+          if (res.errors) setErrors(res.errors);
+          setLoading(false);
+        } else {
+          setLoading(false);
+          onClose();
+        }
       } else {
-        setLoading(false);
-        onClose();
+        const openingDue = parseFloat(formData.openingDueTaka) || 0;
+        const res = await createCustomerAction({
+          name: formData.name,
+          phone: formData.phone,
+          address: formData.address,
+          openingDueTaka: openingDue,
+        });
+
+        if (!res.success) {
+          setGeneralError(res.message || "কাস্টমার তৈরি করতে সমস্যা হয়েছে");
+          if (res.errors) setErrors(res.errors);
+          setLoading(false);
+        } else {
+          if (onCustomerCreated && res.data) {
+            onCustomerCreated({
+              id: res.data.id,
+              name: formData.name,
+              phone: formData.phone,
+              cachedBalancePoisha: Math.round(openingDue * 100),
+            });
+          }
+          setLoading(false);
+          onClose();
+        }
       }
-    } else {
-      const openingDue = parseFloat(formData.openingDueTaka) || 0;
-      const res = await createCustomerAction({
-        name: formData.name,
-        phone: formData.phone,
-        address: formData.address,
-        openingDueTaka: openingDue,
-      });
-
-      if (!res.success) {
-        setGeneralError(res.message || "কাস্টমার তৈরি করতে সমস্যা হয়েছে");
-        if (res.errors) setErrors(res.errors);
-        setLoading(false);
+    } catch {
+      // Network failure fallback for non-editing
+      if (!isEditing) {
+        await handleOfflineCustomerCreate();
       } else {
+        setGeneralError("ইন্টারনেট সংযোগ নেই। পরে চেষ্টা করুন।");
         setLoading(false);
-        onClose();
       }
     }
   };

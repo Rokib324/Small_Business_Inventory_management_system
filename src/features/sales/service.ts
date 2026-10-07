@@ -159,8 +159,8 @@ export async function createSaleTransaction(
         },
       });
 
-      // Decrement cached stock on Product
-      await tx.product.update({
+      // Decrement cached stock on Product and flag for review if stock becomes negative (Phase 3 Rule 6)
+      const updatedProduct = await tx.product.update({
         where: { id: item.productId },
         data: {
           cachedStock: {
@@ -168,6 +168,13 @@ export async function createSaleTransaction(
           },
         },
       });
+
+      if (updatedProduct.cachedStock < 0 && !updatedProduct.needsReview) {
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { needsReview: true },
+        });
+      }
     }
 
     // 9. Update Customer Balance and Ledger Entry if customer attached

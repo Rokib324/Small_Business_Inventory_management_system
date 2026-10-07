@@ -185,7 +185,7 @@ export function getTenantDb(shopId: string) {
           },
         } as unknown as Prisma.SelectSubset<T, Prisma.SaleFindFirstArgs>);
       },
-      findUnique: (id: string, include?: Prisma.SaleInclude) => {
+      findUnique: <T extends Prisma.SaleInclude>(id: string, include?: T) => {
         return prisma.sale.findFirst({
           where: {
             id,
@@ -193,7 +193,7 @@ export function getTenantDb(shopId: string) {
             deletedAt: null,
           },
           include,
-        });
+        }) as unknown as Promise<Prisma.SaleGetPayload<{ include: T }> | null>;
       },
       softDelete: (id: string, tx?: Prisma.TransactionClient) => {
         const client = tx || prisma;

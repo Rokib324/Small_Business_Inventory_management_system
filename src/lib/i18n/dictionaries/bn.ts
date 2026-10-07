@@ -46,6 +46,7 @@ export const bn = {
     lowStock: "কম স্টক পণ্য",
     payments: "পেমেন্ট গ্রহণ",
     reports: "হিসাব ও রিপোর্ট",
+    smsSettings: "এসএমএস ও তাগাদা",
     settings: "দোকানের সেটিংস",
     logout: "লগআউট",
   },

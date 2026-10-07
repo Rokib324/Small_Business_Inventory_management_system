@@ -1,6 +1,4 @@
-"use client";
-
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useOfflineSync } from "@/lib/offline/useOfflineSync";
 import {
   Wifi,
@@ -8,15 +6,26 @@ import {
   RefreshCw,
   AlertCircle,
   Clock,
-  CheckCircle2,
-  X,
   Layers,
+  X,
+  CheckCircle2,
   RotateCcw,
 } from "lucide-react";
-import { toBanglaDigits } from "@/lib/money";
 import { Button } from "@/components/ui/button";
+import { toBanglaDigits } from "@/lib/money";
+
+const emptySubscribe = () => () => {};
+function useIsClient() {
+  return useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
+}
 
 export function SyncStatusIndicator() {
+  const isClient = useIsClient();
+
   const {
     status,
     pendingCount,
@@ -47,6 +56,15 @@ export function SyncStatusIndicator() {
       setIsManualSyncing(false);
     }
   };
+
+  if (!isClient) {
+    return (
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800">
+        <Wifi className="h-3.5 w-3.5 text-emerald-600" />
+        <span>অনলাইন</span>
+      </div>
+    );
+  }
 
   // Determine pill status display
   let badgeColor = "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800";

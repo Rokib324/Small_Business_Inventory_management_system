@@ -1,10 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import { WifiOff, ShoppingCart, Users, CreditCard, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-export const metadata = {
-  title: "অফলাইন মোড | বাকি (Baki)",
-};
 
 export default function OfflinePage() {
   return (

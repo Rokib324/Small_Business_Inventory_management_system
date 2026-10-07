@@ -13,6 +13,7 @@ import {
   Truck,
   Building2,
   BarChart3,
+  MessageSquare,
 } from "lucide-react";
 import { t } from "@/lib/i18n";
 import { clsx } from "clsx";
@@ -68,6 +69,11 @@ const navItems = [
     href: "/reports",
     label: t.nav.reports,
     icon: BarChart3,
+  },
+  {
+    href: "/settings/sms",
+    label: t.nav.smsSettings,
+    icon: MessageSquare,
   },
 ];
 

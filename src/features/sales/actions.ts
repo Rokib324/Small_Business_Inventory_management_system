@@ -75,3 +75,49 @@ export async function createSaleAction(
     };
   }
 }
+
+export async function getSaleShareDataAction(saleId: string): Promise<
+  ActionResponse<{
+    shareUrl: string;
+    whatsAppUrl: string | null;
+    invoiceNumber: string;
+    customerPhone: string | null;
+  }>
+> {
+  const { shopId } = await getSessionTenantDb();
+  const { prisma } = await import("@/lib/db/prisma");
+  const { getInvoiceShareUrl, getWhatsAppShareUrl } = await import("@/lib/invoice/token");
+
+  const sale = await prisma.sale.findFirst({
+    where: { id: saleId, shopId, deletedAt: null },
+    include: {
+      customer: true,
+      shop: true,
+    },
+  });
+
+  if (!sale) {
+    return { success: false, message: "চালান খুঁজে পাওয়া যায়নি।" };
+  }
+
+  // Base URL from env or default
+  const origin = process.env.NEXTAUTH_URL || "http://localhost:3000";
+  const shareUrl = getInvoiceShareUrl(sale.id, shopId, origin, 168); // 7 days expiring token
+
+  let whatsAppUrl: string | null = null;
+  if (sale.customer?.phone) {
+    const text = `আসসালামু আলাইকুম ${sale.customer.name}, ${sale.shop.name} থেকে আপনার ক্রয়ের চালানটি (নং: ${sale.invoiceNumber}) দেখতে নিচের লিংকে প্রবেশ করুন:\n${shareUrl}`;
+    whatsAppUrl = getWhatsAppShareUrl(sale.customer.phone, text);
+  }
+
+  return {
+    success: true,
+    data: {
+      shareUrl,
+      whatsAppUrl,
+      invoiceNumber: sale.invoiceNumber,
+      customerPhone: sale.customer?.phone || null,
+    },
+  };
+}
+

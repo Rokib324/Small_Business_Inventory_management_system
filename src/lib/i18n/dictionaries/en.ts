@@ -48,6 +48,7 @@ export const en: TranslationDictionary = {
     lowStock: "Low Stock",
     payments: "Receive Payment",
     reports: "Reports",
+    smsSettings: "SMS & Reminders",
     settings: "Shop Settings",
     logout: "Logout",
   },

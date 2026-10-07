@@ -74,6 +74,19 @@ enum AuditAction {
   LOGOUT
 }
 
+enum SmsStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum SmsType {
+  DUE_REMINDER
+  SALE_RECEIPT
+  PAYMENT_RECEIPT
+  CUSTOM
+}
+
 // ----------------------------------------------------
 // Models
 // ----------------------------------------------------
@@ -84,6 +97,7 @@ model Shop {
   phone          String?
   address        String?
   currency       String          @default("BDT")
+  smsDailyLimit  Int             @default(100)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   deletedAt      DateTime?
@@ -100,6 +114,8 @@ model Shop {
   payments       Payment[]
   ledgerEntries  LedgerEntry[]
   auditLogs      AuditLog[]
+  smsLogs        SmsLog[]
+  smsTemplates   SmsTemplate[]
 
   @@index([deletedAt])
 }
@@ -143,6 +159,7 @@ model Customer {
   sales               Sale[]
   payments            Payment[]
   ledgerEntries       LedgerEntry[]
+  smsLogs             SmsLog[]
 
   @@unique([shopId, clientId])
   @@index([shopId])
@@ -415,4 +432,41 @@ model AuditLog {
   @@index([shopId])
   @@index([shopId, entityType, entityId])
   @@index([shopId, createdAt])
+}
+
+model SmsLog {
+  id             String    @id @default(cuid())
+  shopId         String
+  shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  recipientPhone String
+  message        String
+  smsType        SmsType
+  status         SmsStatus @default(PENDING)
+  costPoisha     Int       @default(0)
+  provider       String    // "mock", "greenweb", "sslwireless"
+  messageId      String?
+  error          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([shopId])
+  @@index([shopId, createdAt])
+  @@index([shopId, customerId])
+}
+
+model SmsTemplate {
+  id        String    @id @default(cuid())
+  shopId    String
+  shop      Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name      String
+  smsType   SmsType
+  template  String    // e.g. "প্রিয় {customer_name}, {shop_name}-এ আপনার বাকি {due_amount} টাকা।"
+  isDefault Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([shopId])
 }

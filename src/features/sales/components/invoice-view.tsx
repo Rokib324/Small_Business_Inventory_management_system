@@ -11,8 +11,16 @@ import {
   ShoppingCart,
   FileText,
   Receipt as ReceiptIcon,
+  Download,
+  Share2,
+  MessageSquare,
+  Copy,
+  Check,
+  Send,
 } from "lucide-react";
 import { t } from "@/lib/i18n";
+import { getSaleShareDataAction } from "../actions";
+import { sendSaleReceiptAction } from "@/features/sms/actions";
 
 type FullSale = Sale & {
   items: SaleItem[];
@@ -27,9 +35,65 @@ interface InvoiceViewProps {
 
 export function InvoiceView({ sale }: InvoiceViewProps) {
   const [layoutMode, setLayoutMode] = useState<"a4" | "thermal">("a4");
+  const [isSendingSms, setIsSendingSms] = useState(false);
+  const [smsFeedback, setSmsFeedback] = useState<string | null>(null);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [shareData, setShareData] = useState<{
+    shareUrl: string;
+    whatsAppUrl: string | null;
+  } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleDownloadPdf = () => {
+    window.open(`/api/sales/${sale.id}/pdf?format=${layoutMode}`, "_blank");
+  };
+
+  const handleOpenShare = async () => {
+    setIsShareModalOpen(true);
+    if (!shareData) {
+      const res = await getSaleShareDataAction(sale.id);
+      if (res.success && res.data) {
+        setShareData({
+          shareUrl: res.data.shareUrl,
+          whatsAppUrl: res.data.whatsAppUrl,
+        });
+      }
+    }
+  };
+
+  const handleCopyLink = () => {
+    if (shareData?.shareUrl) {
+      navigator.clipboard.writeText(shareData.shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleSendSms = async () => {
+    if (!sale.customer?.phone) {
+      alert("গ্রাহকের কোনো মোবাইল নম্বর নেই।");
+      return;
+    }
+
+    setIsSendingSms(true);
+    setSmsFeedback(null);
+    try {
+      const res = await sendSaleReceiptAction({ saleId: sale.id });
+      if (res.success) {
+        setSmsFeedback("রসিদ এসএমএস সফলভাবে পাঠানো হয়েছে!");
+      } else {
+        setSmsFeedback(`ব্যর্থ: ${res.error || "এসএমএস পাঠানো যায়নি"}`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "এসএমএস পাঠানো যায়নি";
+      setSmsFeedback(`ব্যর্থ: ${msg}`);
+    } finally {
+      setIsSendingSms(false);
+    }
   };
 
   const formattedDate = new Date(sale.createdAt).toLocaleDateString("bn-BD", {
@@ -46,7 +110,7 @@ export function InvoiceView({ sale }: InvoiceViewProps) {
   return (
     <div className="space-y-6">
       {/* Top Action Bar (Hidden in Print) */}
-      <div className="print:hidden flex flex-col sm:flex-row items-center justify-between gap-4 bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
+      <div className="print:hidden flex flex-col md:flex-row items-center justify-between gap-4 bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
         <div className="flex items-center gap-3">
           <Link
             href="/sales"
@@ -64,7 +128,7 @@ export function InvoiceView({ sale }: InvoiceViewProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Layout Mode Toggle */}
           <div className="flex p-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-xs font-semibold">
             <button
@@ -91,19 +155,122 @@ export function InvoiceView({ sale }: InvoiceViewProps) {
             </button>
           </div>
 
-          <Button onClick={handlePrint} className="gap-2">
+          <Button onClick={handlePrint} variant="outline" className="gap-2 cursor-pointer">
             <Printer className="h-4 w-4" />
             {t.common.print}
           </Button>
 
+          <Button onClick={handleDownloadPdf} variant="outline" className="gap-2 cursor-pointer text-emerald-700 dark:text-emerald-400">
+            <Download className="h-4 w-4" />
+            PDF ডাউনলোড
+          </Button>
+
+          <Button onClick={handleOpenShare} variant="outline" className="gap-2 cursor-pointer">
+            <Share2 className="h-4 w-4" />
+            শেয়ার / হোয়াটসঅ্যাপ
+          </Button>
+
+          {sale.customer?.phone && (
+            <Button
+              onClick={handleSendSms}
+              disabled={isSendingSms}
+              variant="outline"
+              className="gap-2 cursor-pointer"
+            >
+              <MessageSquare className="h-4 w-4 text-emerald-600" />
+              {isSendingSms ? "পাঠানো হচ্ছে..." : "এসএমএস রসিদ"}
+            </Button>
+          )}
+
           <Link href="/sales/new">
-            <Button variant="outline" className="gap-2">
+            <Button className="gap-2 cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white">
               <ShoppingCart className="h-4 w-4" />
               নতুন বিক্রি
             </Button>
           </Link>
         </div>
       </div>
+
+      {/* SMS feedback toast banner */}
+      {smsFeedback && (
+        <div className="print:hidden p-3 rounded-lg text-xs font-medium bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 flex items-center justify-between">
+          <span>{smsFeedback}</span>
+          <button
+            onClick={() => setSmsFeedback(null)}
+            className="text-zinc-400 hover:text-zinc-700 text-sm font-bold"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Share / WhatsApp Modal */}
+      {isShareModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <Share2 className="h-5 w-5 text-emerald-600" />
+                চালান শেয়ার করুন
+              </h3>
+              <button
+                onClick={() => setIsShareModalOpen(false)}
+                className="text-zinc-400 hover:text-zinc-600 font-bold text-xl"
+              >
+                ×
+              </button>
+            </div>
+
+            <p className="text-xs text-zinc-500">
+              নিরাপদ এনক্রিপ্টেড ও মেয়াদযুক্ত লিংকের মাধ্যমে গ্রাহককে চালান শেয়ার করুন:
+            </p>
+
+            {shareData ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 p-2 bg-zinc-50 dark:bg-zinc-800 rounded-lg border border-zinc-200 dark:border-zinc-700">
+                  <input
+                    type="text"
+                    readOnly
+                    value={shareData.shareUrl}
+                    className="text-xs bg-transparent w-full text-zinc-700 dark:text-zinc-300 outline-hidden font-mono"
+                  />
+                  <button
+                    onClick={handleCopyLink}
+                    className="p-1.5 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition"
+                    title="লিংক কপি করুন"
+                  >
+                    {copied ? (
+                      <Check className="h-4 w-4 text-emerald-600" />
+                    ) : (
+                      <Copy className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+
+                {shareData.whatsAppUrl ? (
+                  <a
+                    href={shareData.whatsAppUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-xs"
+                  >
+                    <Send className="h-4 w-4" />
+                    হোয়াটসঅ্যাপে পাঠান ({sale.customer?.phone})
+                  </a>
+                ) : (
+                  <div className="p-3 bg-amber-50 dark:bg-amber-950 border border-amber-200 rounded-lg text-xs text-amber-800 dark:text-amber-300">
+                    গ্রাহকের মোবাইল নম্বর নেই। কপি বাটন চেপে মেসেঞ্জারে বা এসএমএসে লিংক পাঠাতে পারেন।
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-6 text-xs text-zinc-500">
+                সুরক্ষিত লিংক তৈরি হচ্ছে...
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* 1. A4 INVOICE LAYOUT */}
